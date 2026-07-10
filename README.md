@@ -1,12 +1,11 @@
 # OpenClaw Memory Stack Demo
 
-A reproducible A/B experiment showing what the claw-operator's opt-in memory
-stack ([claw-operator PR #36](https://github.com/redhat-et/claw-operator/pull/36),
-`spec.memory`) actually does for an agent.
+A reproducible walkthrough of what the claw-operator's opt-in memory stack
+([claw-operator PR #36](https://github.com/redhat-et/claw-operator/pull/36),
+`spec.memory`) does for an agent.
 
 Two identical OpenClaw instances are seeded with an identical two-month memory
-corpus. The only difference between them is a two-line block in the Claw
-custom resource:
+corpus. The only difference is a two-line block in the Claw custom resource:
 
 ```yaml
 spec:
@@ -14,103 +13,72 @@ spec:
     enabled: true
 ```
 
-Both instances have every note on disk. Ask them a paraphrased question about
-a decision buried a month deep in the corpus and:
+Both instances have every note on disk. Ask them a paraphrased question about a
+decision buried a month deep and:
 
-- **`claw-plain`** (no `spec.memory`) answers in ~18s: *"I don't have that
-  saved... this workspace looks fresh... remind me once and I'll keep it
-  straight going forward."*
-- **`claw-memory`** (`spec.memory.enabled: true`) answers in ~49s: *"For
-  Beacon, the hobby weather dashboard, we settled on Open-Meteo... Python +
-  FastAPI, with dependencies managed by uv only, not pip"*, citing the exact
-  memory file and line numbers.
+- **`claw-plain`** (no memory stack) answers ~18s: *"I don't have that saved...
+  this workspace looks fresh... remind me once and I'll keep it straight."*
+- **`claw-memory`** (`spec.memory.enabled: true`) answers ~49s: *"For Beacon,
+  the weather dashboard, we settled on Open-Meteo... Python + FastAPI, uv only,
+  not pip"*, citing the exact memory file and line.
 
-The point: **storing everything is trivial; remembering is a system.** The
-plain instance keeps the same notes and cannot use them. The memory stack adds
-the pieces that close that gap: semantic (vector) recall, the memory-wiki
-knowledge layer, and dreaming consolidation, packaged as one CR field.
+The point: **storing everything is trivial; remembering is a system.** The plain
+instance keeps the same notes and cannot use them.
 
-## How the experiment is designed
+## The three layers
 
-- `gen_corpus.py` deterministically generates 61 daily memory logs
-  (2026-05-09 to 2026-07-08, 244 entries). Most entries are realistic noise:
-  homelab chores, family notes, weather small talk. It also contains decoy
-  projects that made their own API decisions (a photo-backup tool on
-  Backblaze B2, a garden-sensor dashboard on Adafruit IO, a newsletter on
-  Buttondown), so naive keyword search cannot shortcut the test.
-- Buried on 2026-06-06: the "Beacon" hobby project decision, its API choice
-  (Open-Meteo), the stack (Python + FastAPI), a working preference (uv, never
-  pip), and the full rationale for rejecting five other weather APIs.
-- The recall probe (`prompts/recall-only.txt`) deliberately never says
-  "Beacon" or "Open-Meteo". Answering it requires semantic retrieval, not
-  string matching.
-- The corpus is seeded onto BOTH instances byte-for-byte, so the contrast is
-  attributable to the memory system alone.
+The demo walks the three things that turn storage into memory:
 
-## Why the control instance needs the gated operator
+1. **Search** (retrieval) — find the right note from meaning, even a paraphrase.
+2. **Dreaming** (consolidation) — promote durable facts into always-loaded
+   long-term memory, autonomously, overnight.
+3. **Wiki** (organization) — synthesize a self-auditing knowledge graph of
+   entities, concepts, claims, and the relationships between them.
 
-Two facts make an honest "no memory" baseline harder than it sounds, and both
-were discovered by running this experiment:
+Arc: **find it → keep what matters → organize it all.**
 
-1. `memory-core` is a bundled, auto-enabled OpenClaw plugin on every instance.
-   Every agent writes daily memory files and can read recent ones. At small
-   scale (facts from the same day) the baseline recalls fine.
-2. Before PR #36's gating fix, the operator auto-enabled vector memory search
-   from any embedding-capable credential (regardless of `spec.memory`), so the
-   baseline had semantic recall too and the A/B showed no contrast at any
-   scale.
+---
 
-PR #36 gates semantic search behind `spec.memory.enabled`. With the gated
-operator, the control instance's config carries
-`memorySearch.enabled: false` and the CLI reports "Memory search disabled".
-This experiment therefore requires an operator build that includes PR #36.
+# Setup (before the walkthrough)
+
+One-time prep, done off-camera. The walkthrough itself is just pasting prompts
+into two chat windows and revealing a few artifacts.
 
 ## Prerequisites
 
 - An OpenShift/Kubernetes cluster running claw-operator **with `spec.memory`
-  support** (PR #36). Verify with: `oc explain claw.spec.memory`
-- A namespace you can deploy to, and a Secret holding an OpenAI API key
-  (embeddings are required for vector recall; the same credential drives chat)
-- `oc`, `python3`, and `bash` locally
+  support** (PR #36). Verify: `oc explain claw.spec.memory`
+- A namespace, and a Secret holding an OpenAI API key (embeddings drive vector
+  recall; the same credential drives chat).
+- `oc`, `python3`, `bash`, and (for layer 3's graph) [Obsidian](https://obsidian.md).
 
-The CRs carry no namespace; every command below applies them with `-n $NS`.
-They expect a Secret named `openai-api-key` (key `api-key`) in that namespace;
-either create one or edit the `secretRef` in both CR files to point at yours.
+The CRs carry no namespace; commands apply them with `-n $NS`. They expect a
+Secret named `openai-api-key` (key `api-key`); create one or edit the
+`secretRef` in both CR files.
 
-## Repository contents
-
-| File | Purpose |
-|---|---|
-| `claw-plain.yaml` | Control instance CR (no `spec.memory`) |
-| `claw-memory.yaml` | Memory instance CR (`spec.memory.enabled: true`) |
-| `gen_corpus.py` | Deterministic 61-day corpus generator (writes `corpus/`) |
-| `prompts/recall-only.txt` | The paraphrased recall probe (the headline test) |
-| `prompts/s2probe2.txt` | Decision-rationale probe |
-| `prompts/s2probe1.txt` | Recall + scaffold probe (see caveats before using) |
-| `prompts/s1p1.txt`, `prompts/s1p2.txt` | Interactive two-session variant of the scenario |
-| `run-probe.sh` | Headless probe runner (`oc exec` + `openclaw agent --json`) |
-
-## Running the experiment
-
-### 1. Deploy both instances
+## 1. Deploy both instances
 
 ```bash
 export NS=<your-namespace>
 oc apply -n $NS -f claw-plain.yaml -f claw-memory.yaml
-oc get claw -n $NS -w   # wait for Ready=True on both
+oc get claw -n $NS -w        # wait for Ready=True on both
 ```
 
-### 2. Seed the identical corpus onto both instances
+`claw-plain` explicitly disables `memorySearch` in `spec.config.raw` (the
+operator enables it by default from the credential; see
+[Why the control disables search](#why-the-control-disables-search)).
+
+## 2. Seed the identical corpus onto both instances
 
 ```bash
-python3 gen_corpus.py    # writes corpus/ (61 files; deterministic seed)
+python3 gen_corpus.py         # writes corpus/ (61 files; deterministic)
 for inst in claw-plain claw-memory; do
   tar -C corpus -cf - . | oc exec -i -n $NS deploy/$inst -c gateway -- \
     sh -c 'mkdir -p ~/.openclaw/workspace/memory && tar -C ~/.openclaw/workspace/memory -xf -'
 done
 ```
 
-### 3. Build the vector index on the memory instance
+## 3. Build the vector index on the memory instance
 
 ```bash
 oc exec -n $NS deploy/claw-memory -c gateway -- openclaw memory index
@@ -118,103 +86,91 @@ oc exec -n $NS deploy/claw-memory -c gateway -- openclaw memory status
 # expect: Embedding cache: enabled (61 entries)
 ```
 
-### 4. Verify the preconditions
+## 4. Verify the preconditions
 
 ```bash
-# Control: semantic search must be OFF
+# control: search OFF
 oc exec -n $NS deploy/claw-plain -c gateway -- openclaw memory status
 # expect: "Memory search disabled"
 
-# Memory instance: stack active with vector recall
+# memory instance: stack active
 oc get claw claw-memory -n $NS \
   -o jsonpath='{.status.conditions[?(@.type=="MemoryStack")].message}'
 # expect: "Memory stack enabled with vector recall"
 ```
 
-### 5. Run the probes
+Open each instance's **WebChat** in its own browser window, tiled side by side
+(`claw-plain` left, `claw-memory` right).
 
-`run-probe.sh` drives a headless agent turn. A new `--session-key` is a fresh
-session, so each probe below starts with an empty context window. It reads
-the namespace from `$NS`.
+---
 
-```bash
-./run-probe.sh claw-plain  prompts/recall-only.txt take1 plain.json
-./run-probe.sh claw-memory prompts/recall-only.txt take1 memory.json
+# The walkthrough
 
-# Read the answers and token usage:
-python3 -c "import json;d=json.load(open('plain.json'));print(d['result']['payloads'][0]['text'])"
-python3 -c "import json;d=json.load(open('memory.json'));m=d['result']['meta']['agentMeta'];print(m['usage']);print(d['result']['payloads'][0]['text'])"
+Paste each prompt into **both** chat windows unless noted. Start a fresh session
+(`/new`) in each before Layer 1 so the context window is empty.
+
+## Layer 1 — Search: it can find what matters
+
+Paste into **both** instances (it never says "Beacon" or "Open-Meteo", so
+answering it requires semantic recall, not string matching):
+
+```
+Quick question, no need to do any work: which API did we settle on for that hobby project we talked about, and what stack did we agree on?
 ```
 
-Follow up with the rationale probe (`prompts/s2probe2.txt`, a new session
-key): the rejection rationale for the other APIs is in the corpus; the memory
-instance retrieves the real trade-offs, the control cannot.
+**What you'll see:** `claw-plain` says it has no such context and asks to be
+re-told. `claw-memory` names Beacon, Open-Meteo, FastAPI, and the uv preference,
+with a citation to the exact memory file and line.
 
-You can also run the probes interactively in each instance's WebChat instead
-of headlessly; for a clean session boundary use `/new` and optionally
-`oc rollout restart deploy/<name> -n $NS`.
+Follow up, into **both**:
 
-### Expected results
-
-| | `claw-plain` | `claw-memory` |
-|---|---|---|
-| Recall probe outcome | Asks to be re-told the project, API, and stack | Names Beacon, Open-Meteo, FastAPI, uv, with file citations |
-| Observed latency | ~15-20s | ~30-60s |
-| Observed tokens | ~17.5k | ~21k |
-
-Note the memory instance is *slower*, retrieval work is not free. The result
-is about correctness, not speed.
-
-The recall probe above is **layer 1 of 3** (retrieval). The memory stack has
-two more layers that turn retrieval into a memory *system*: consolidation and
-organization.
-
-### Layer 2: consolidation (dreaming)
-
-The memory stack runs a background "dreaming" pass that promotes durable facts
-into curated long-term memory. On a memory-enabled instance the operator seeds
-a nightly cron for this:
-
-```bash
-oc exec -n $NS deploy/claw-memory -c gateway -- openclaw cron list
-# -> a "Memory Dreaming Promotion" job on 0 3 * * *
+```
+Remind me why we ruled out the other weather APIs for that project.
 ```
 
-To trigger it now instead of waiting for 03:00, and inspect the artifacts:
+The rejection rationale is in the corpus; `claw-memory` reproduces the real
+trade-offs, `claw-plain` can only guess.
+
+## Layer 2 — Dreaming: it keeps what matters
+
+This layer needs no prompt. The operator seeds a nightly "Memory Dreaming
+Promotion" cron (`0 3 * * *`) that, on its own, promotes durable facts into
+`MEMORY.md` (loaded into context every session) and writes reflections into
+`DREAMS.md`. Reveal what it produced:
 
 ```bash
-# write dream reflections over the corpus, and promote durable facts:
-oc exec -n $NS deploy/claw-memory -c gateway -- \
-  openclaw memory rem-backfill --path ~/.openclaw/workspace/memory
-oc exec -n $NS deploy/claw-memory -c gateway -- openclaw memory promote
-
-# the results:
-oc exec -n $NS deploy/claw-memory -c gateway -- cat ~/.openclaw/workspace/DREAMS.md   # nightly reflections
-oc exec -n $NS deploy/claw-memory -c gateway -- cat ~/.openclaw/workspace/MEMORY.md   # promoted long-term memory
+oc exec -n $NS deploy/claw-memory -c gateway -- cat ~/.openclaw/workspace/MEMORY.md
+oc exec -n $NS deploy/claw-memory -c gateway -- cat ~/.openclaw/workspace/DREAMS.md
 ```
 
-`MEMORY.md` is loaded into context at every session start, so promoted facts
-need no search to surface. The consolidation flywheel: an instance can only
-promote a fact it was able to recall in the first place, which is why recall
-(layer 1) is what makes the other layers compound.
+The Beacon decision has been distilled into curated long-term memory,
+autonomously. (To trigger it on demand instead of waiting for 03:00:
+`openclaw memory rem-backfill --path ~/.openclaw/workspace/memory` then
+`openclaw memory promote`.) The flywheel: an instance can only promote a fact it
+could recall in the first place, which is why `claw-plain` never builds one.
 
-### Layer 3: organization (the wiki knowledge graph)
+## Layer 3 — Wiki: it organizes everything
 
-The stack also builds a memory-wiki: a structured, self-auditing knowledge
-graph of entities, concepts, and claims with provenance. Bridge mode imports
-raw memory into `wiki/main/sources/` automatically, but the synthesis into
-entity/concept pages is driven by agent activity, so trigger it explicitly
-(this is a heavy turn, ~4-5 min; it does not OOM):
+Paste into **`claw-memory` only** (a heavy turn, ~4-5 min; time-cut it in edit):
+
+```
+Use your memory-wiki tools to build out your knowledge vault from your existing memory. Review your memory (the daily notes and MEMORY.md), and create or update wiki entity and concept pages for the projects and decisions you find, especially the Beacon project (its API choice and stack), and the other projects (Nimbus, Larkspur). Capture source-backed claims and relationships between them. Then compile the vault. Report which pages you created.
+```
+
+Then the "it doesn't just catalog, it abstracts" beat, into **`claw-memory`**:
+
+```
+Using your memory-wiki tools, write a synthesis page that abstracts the decision-making pattern across your three hobby projects: Beacon, Nimbus, and Larkspur. What do their technology/API choices have in common? Look for the shared decision criteria and any recurring preferences. Link the synthesis to the three entity pages and the relevant concept pages, with source-backed claims. Then compile the vault. Report the page you created and what pattern you found.
+```
+
+Reveal a synthesized page (cited claims + relationships):
 
 ```bash
-./run-probe.sh claw-memory prompts/build-wiki.txt wiki1 wiki.json
-
-# inspect a synthesized page (cited claims + relationships):
 oc exec -n $NS deploy/claw-memory -c gateway -- \
   cat ~/.openclaw/workspace/wiki/main/entities/beacon.md
 ```
 
-**Visualize it as a graph in Obsidian.** Extract the vault and open it:
+**Visualize the knowledge graph in Obsidian.** Extract the vault and open it:
 
 ```bash
 mkdir -p wiki-vault
@@ -223,26 +179,99 @@ oc exec -n $NS deploy/claw-memory -c gateway -- \
 ```
 
 In Obsidian: **Open folder as vault** → select `wiki-vault/main` → open
-**Graph view** (`Cmd/Ctrl+G`). You'll see the project entities (Beacon,
-Nimbus, Larkspur) as hubs, their concept pages as satellites, and the source
-notes as provenance leaves. For a clean view, filter out the scaffolding nodes
-with a graph search of `-file:index -file:WIKI -file:AGENTS -file:inbox`, and
-color-group by folder (`entities`/`concepts`/`sources`). The vault uses plain
-markdown relative links, so any Obsidian-compatible or OKF-aware viewer renders
-the same graph.
+**Graph view** (`Cmd/Ctrl+G`). You'll see the three project entities (Beacon,
+Nimbus, Larkspur) as hubs, their concept pages as satellites, the source notes
+as provenance leaves, and the synthesis page as a top node tying all three
+clusters together. For a clean view, filter out scaffolding with a graph search
+of `-file:index -file:WIKI -file:AGENTS -file:inbox`, and color-group by folder
+(`entities`/`concepts`/`sources`). The vault is plain markdown with relative
+links, so any Obsidian-compatible (or Open-Knowledge-Format-aware) viewer
+renders the same graph.
 
-## Caveats and known issues
+## Close
 
-- **Heavy multi-tool turns can OOM the memory instance's gateway** at the
-  operator's default 4Gi memory limit (upstream OpenClaw issue involving the
-  codex harness session mirroring and the memory-wiki bridge; the pod
-  self-recovers). The recall and rationale probes are stable; the scaffold
-  probe (`prompts/s2probe1.txt`) is the risky one.
-- Re-running probes writes new memory on the memory instance (including
-  `MEMORY.md`), which changes later recall citations. For a clean repeat of
-  the experiment, delete both Claws and their PVCs and start from step 1.
-- `uv` is not installed in the OpenClaw gateway image and the egress proxy
-  blocks its installer, so generated project scaffolds cannot be fully run
-  in-pod.
-- Probe timings vary with model load; the numbers above are single-run
-  observations, not benchmarks.
+Three layers: **find it, keep it, organize it.** The plain instance had every
+note and could do none of it. Storing is trivial; this is a memory system, and
+it is two lines of YAML on a Claw resource.
+
+---
+
+# Headless / scriptable alternative
+
+Everything conversational above can be driven without a browser, which is how
+the token/latency numbers were measured. `run-probe.sh` sends one agent turn via
+`oc exec` and returns JSON with usage and timing (set `NS` first):
+
+```bash
+./run-probe.sh claw-plain  prompts/recall-only.txt take1 plain.json
+./run-probe.sh claw-memory prompts/recall-only.txt take1 memory.json
+python3 -c "import json;d=json.load(open('memory.json'));m=d['result']['meta']['agentMeta'];print(m['usage']);print(d['result']['payloads'][0]['text'])"
+```
+
+The prompts used in the walkthrough are also in `prompts/` for scripting:
+`recall-only.txt`, `s2probe2.txt` (rationale), `build-wiki.txt`,
+`build-synthesis.txt`. (`s1p1.txt`/`s1p2.txt` are an older two-session variant;
+`s2probe1.txt` is a recall+scaffold probe, heavier and OOM-prone, see caveats.)
+
+Measured single-run A/B (recall probe): `claw-plain` ~18s / ~17.5k tokens of
+amnesia vs `claw-memory` ~49s / ~21k tokens of cited recall. The memory instance
+is *slower*, retrieval is not free; the result is about correctness, not speed.
+
+---
+
+# How the experiment is designed
+
+- `gen_corpus.py` deterministically generates 61 daily logs (2026-05-09 to
+  2026-07-08, 244 entries). Most are realistic noise (homelab chores, family
+  notes, weather). It also plants **decoy projects** that made their own API
+  decisions (a photo-backup tool on Backblaze B2, a garden dashboard on Adafruit
+  IO, a newsletter on Buttondown), so naive keyword search cannot shortcut it.
+- Buried on 2026-06-06: the Beacon decision, API choice (Open-Meteo), stack
+  (FastAPI), the uv-never-pip preference, and the rationale for rejecting five
+  other weather APIs.
+- The recall prompt never names the project or API, so it requires semantic
+  retrieval.
+- The corpus is seeded onto BOTH instances byte-for-byte, so the contrast is
+  attributable to the memory system alone.
+
+## Why the control disables search
+
+Two facts make an honest "no memory" baseline harder than it sounds, both
+discovered by running this experiment:
+
+1. `memory-core` is a bundled, auto-enabled OpenClaw plugin on every instance.
+   Every agent writes daily memory files and reads recent ones, so at small
+   scale (same-day facts) even a bare instance recalls fine. The buried-a-month
+   corpus defeats that: recent-file loading misses it.
+2. The operator auto-enables vector `memorySearch` from any embedding-capable
+   credential (upstream
+   [codeready-toolchain/claw-operator#177](https://github.com/codeready-toolchain/claw-operator/pull/177)),
+   independently of `spec.memory`. So a bare instance with an OpenAI key would
+   *also* have semantic recall.
+
+To isolate the memory stack's contribution, `claw-plain` therefore sets
+`agents.defaults.memorySearch.enabled: false` in `spec.config.raw`; the operator
+respects a user-set `memorySearch` and backs off. That makes the control a true
+"file memory only" baseline. (PR #36 itself is purely additive over #177: it
+adds the wiki and dreaming layers and packages them behind `spec.memory`.)
+
+---
+
+# Caveats and known issues
+
+- **Heavy multi-tool turns can OOM the memory instance's gateway** at the default
+  4Gi limit (an upstream issue involving the codex harness's session mirroring
+  and the wiki bridge; the pod self-recovers). Recall, rationale, and the wiki
+  builds are stable; the recall+scaffold probe (`prompts/s2probe1.txt`) is the
+  risky one, keep it off camera.
+- Re-running conversational prompts writes new memory on `claw-memory`
+  (including `MEMORY.md`), which changes later citations. For a clean repeat,
+  delete both Claws and their PVCs and start from Setup.
+- The wiki's entity/concept synthesis is driven by the prompts above (or ongoing
+  agent activity); there is no wiki cron yet, unlike dreaming. Bridge *import* of
+  raw memory is automatic, but was bypassed here by side-loading the corpus, so
+  the wiki starts empty until the build prompt runs.
+- `uv` is not installed in the gateway image and the proxy blocks its installer,
+  so generated scaffolds cannot be fully run in-pod.
+- Timings vary with model load; the numbers here are single-run observations,
+  not benchmarks.
