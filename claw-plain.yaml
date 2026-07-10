@@ -1,0 +1,32 @@
+apiVersion: claw.sandbox.redhat.com/v1alpha1
+kind: Claw
+metadata:
+  name: claw-plain
+spec:
+  # Pinned so both demo instances run the identical OpenClaw build.
+  image: ghcr.io/openclaw/openclaw:2026.6.11
+  idle: false
+  # NO spec.memory block. This is the control instance.
+  config:
+    management: operator
+    mergeMode: merge
+    raw:
+      agents:
+        defaults:
+          model:
+            primary: openai/gpt-5.5
+        list:
+        - id: default
+          name: Claw-Plain
+          identity:
+            name: Claw-Plain
+          workspace: ~/.openclaw/workspace
+  credentials:
+  # OpenAI credential present on BOTH instances so model access is identical;
+  # only the memory instance uses it for embeddings. Create this Secret in
+  # your namespace (key: api-key) or point secretRef at your own.
+  - name: openai
+    provider: openai
+    secretRef:
+    - key: api-key
+      name: openai-api-key

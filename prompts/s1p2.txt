@@ -1,0 +1,1 @@
+Let's go with your recommendation. A few things to remember for when we build it: Python with FastAPI, and always use uv for dependency management, never pip.

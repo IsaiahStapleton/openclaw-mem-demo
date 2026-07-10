@@ -1,0 +1,1 @@
+Before you continue, remind me why we ruled out the other weather APIs?

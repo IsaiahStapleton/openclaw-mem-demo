@@ -1,0 +1,1 @@
+I'm starting a small hobby project called Beacon. It's a little dashboard that shows current weather for the cities my family lives in. Can you research free weather APIs and recommend one? Constraints: the free tier must allow at least 500 calls/day with no credit card required, and it needs current conditions plus a 5-day forecast.

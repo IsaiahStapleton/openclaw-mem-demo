@@ -1,0 +1,1 @@
+Let's get started on that hobby project we talked about. Scaffold it using the API we settled on.

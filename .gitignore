@@ -1,0 +1,5 @@
+# Generated corpus (deterministic; regenerate with gen_corpus.py)
+corpus/
+
+# Probe outputs
+*.json

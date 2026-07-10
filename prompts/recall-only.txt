@@ -1,0 +1,1 @@
+Quick question, no need to do any work: which API did we settle on for that hobby project we talked about, and what stack did we agree on?
