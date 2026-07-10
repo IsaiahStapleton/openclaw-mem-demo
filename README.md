@@ -165,15 +165,71 @@ of headlessly; for a clean session boundary use `/new` and optionally
 Note the memory instance is *slower*, retrieval work is not free. The result
 is about correctness, not speed.
 
-### The consolidation follow-on
+The recall probe above is **layer 1 of 3** (retrieval). The memory stack has
+two more layers that turn retrieval into a memory *system*: consolidation and
+organization.
 
-After the memory instance has recalled the buried facts once, check
-`~/.openclaw/workspace/MEMORY.md` on both instances. The memory instance
-distills the recalled decision into curated long-term memory (loaded into
-context at every session start); the control never develops a `MEMORY.md` at
-all. `MEMORY.md` maintenance is bundled memory-core behavior available to
-both, and that is the finding: an instance that cannot retrieve a fact can
-never promote it. Recall is what makes the other memory layers compound.
+### Layer 2: consolidation (dreaming)
+
+The memory stack runs a background "dreaming" pass that promotes durable facts
+into curated long-term memory. On a memory-enabled instance the operator seeds
+a nightly cron for this:
+
+```bash
+oc exec -n $NS deploy/claw-memory -c gateway -- openclaw cron list
+# -> a "Memory Dreaming Promotion" job on 0 3 * * *
+```
+
+To trigger it now instead of waiting for 03:00, and inspect the artifacts:
+
+```bash
+# write dream reflections over the corpus, and promote durable facts:
+oc exec -n $NS deploy/claw-memory -c gateway -- \
+  openclaw memory rem-backfill --path ~/.openclaw/workspace/memory
+oc exec -n $NS deploy/claw-memory -c gateway -- openclaw memory promote
+
+# the results:
+oc exec -n $NS deploy/claw-memory -c gateway -- cat ~/.openclaw/workspace/DREAMS.md   # nightly reflections
+oc exec -n $NS deploy/claw-memory -c gateway -- cat ~/.openclaw/workspace/MEMORY.md   # promoted long-term memory
+```
+
+`MEMORY.md` is loaded into context at every session start, so promoted facts
+need no search to surface. The consolidation flywheel: an instance can only
+promote a fact it was able to recall in the first place, which is why recall
+(layer 1) is what makes the other layers compound.
+
+### Layer 3: organization (the wiki knowledge graph)
+
+The stack also builds a memory-wiki: a structured, self-auditing knowledge
+graph of entities, concepts, and claims with provenance. Bridge mode imports
+raw memory into `wiki/main/sources/` automatically, but the synthesis into
+entity/concept pages is driven by agent activity, so trigger it explicitly
+(this is a heavy turn, ~4-5 min; it does not OOM):
+
+```bash
+./run-probe.sh claw-memory prompts/build-wiki.txt wiki1 wiki.json
+
+# inspect a synthesized page (cited claims + relationships):
+oc exec -n $NS deploy/claw-memory -c gateway -- \
+  cat ~/.openclaw/workspace/wiki/main/entities/beacon.md
+```
+
+**Visualize it as a graph in Obsidian.** Extract the vault and open it:
+
+```bash
+mkdir -p wiki-vault
+oc exec -n $NS deploy/claw-memory -c gateway -- \
+  sh -c 'cd ~/.openclaw/workspace/wiki && tar -cf - main' | tar -C wiki-vault -xf -
+```
+
+In Obsidian: **Open folder as vault** → select `wiki-vault/main` → open
+**Graph view** (`Cmd/Ctrl+G`). You'll see the project entities (Beacon,
+Nimbus, Larkspur) as hubs, their concept pages as satellites, and the source
+notes as provenance leaves. For a clean view, filter out the scaffolding nodes
+with a graph search of `-file:index -file:WIKI -file:AGENTS -file:inbox`, and
+color-group by folder (`entities`/`concepts`/`sources`). The vault uses plain
+markdown relative links, so any Obsidian-compatible or OKF-aware viewer renders
+the same graph.
 
 ## Caveats and known issues
 

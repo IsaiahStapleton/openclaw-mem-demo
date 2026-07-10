@@ -3,3 +3,6 @@ corpus/
 
 # Probe outputs
 *.json
+
+# Extracted instance state (open in Obsidian, do not commit)
+wiki-vault/
