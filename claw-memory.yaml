@@ -4,19 +4,47 @@ metadata:
   name: claw-memory
 spec:
   # Pinned so both demo instances run the identical OpenClaw build.
-  image: ghcr.io/openclaw/openclaw:2026.6.11
+  # 2026.7.1 (not 2026.6.11): required for the Anthropic provider plugin, and
+  # this build routes Claude through a non-Codex harness that injects MEMORY.md
+  # into context at session start (see Layer 2 in the README).
+  image: ghcr.io/openclaw/openclaw:2026.7.1
   idle: false
-  # The entire difference between the two instances is this block.
+  # The entire difference between the two instances is this block plus the
+  # dreaming tuning below.
   memory:
     enabled: true
+  # The memory-wiki synthesis turn (Layer 3) can exceed the 4Gi default gateway
+  # limit and gets OOMKilled. Requires a claw-operator with spec.resources support.
+  resources:
+    limits:
+      memory: 8Gi
   config:
     management: operator
     mergeMode: merge
     raw:
+      plugins:
+        entries:
+          memory-core:
+            config:
+              dreaming:
+                phases:
+                  deep:
+                    # Default 0.8 is unreachable for ordinary paraphrased recall
+                    # (observed composite scores ~0.6-0.7), so nothing ever
+                    # promotes into MEMORY.md. 0.45 lets the buried decision
+                    # promote after a few recalls.
+                    minScore: 0.45
+                    # Default 160 truncates the promoted snippet BEFORE the API
+                    # choice, so the recalled fact is incomplete. 1200 keeps the
+                    # full decision.
+                    maxPromotedSnippetTokens: 1200
       agents:
         defaults:
           model:
-            primary: openai/gpt-5.5
+            # A NON-CODEX chat model is required for Layer 2: OpenAI models route
+            # through the Codex harness, which references MEMORY.md by pointer
+            # instead of loading its contents. Claude loads it at session start.
+            primary: anthropic/claude-sonnet-4-6
         list:
         - id: default
           name: Claw-Memory
@@ -24,9 +52,16 @@ spec:
             name: Claw-Memory
           workspace: ~/.openclaw/workspace
   credentials:
-  # Embedding-capable credential: required for vector recall to activate.
-  # Create this Secret in your namespace (key: api-key) or point secretRef
-  # at your own.
+  # Chat model. Any non-Codex model works; Claude is the reference.
+  # Create a Secret named `anthropic-api-key` (key: api-key) or edit this ref.
+  - name: anthropic
+    provider: anthropic
+    secretRef:
+    - key: api-key
+      name: anthropic-api-key
+  # Embedding-capable credential: required for vector recall (Layer 1). OpenAI
+  # is used only for embeddings here, not for the chat model. Create a Secret
+  # named `openai-api-key` (key: api-key) or edit this ref.
   - name: openai
     provider: openai
     secretRef:

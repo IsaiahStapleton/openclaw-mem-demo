@@ -1,0 +1,8 @@
+Use your memory-wiki tools to build your knowledge vault from your existing memory (the daily notes and MEMORY.md).
+
+Use the correct pageType for each page. This matters:
+- pageType "entity" for each PROJECT you find (Beacon, Nimbus, Larkspur). These go in entities/.
+- pageType "concept" for each DECISION you find (the weather API choice for Beacon, the storage API choice for Nimbus, the device API choice for Larkspur). These go in concepts/.
+- pageType "synthesis" for exactly ONE page that abstracts ACROSS the projects: the shared pattern in how these API decisions were made. This goes in syntheses/.
+
+Do not put projects or decisions in syntheses/. Capture source-backed claims with line-level evidence, and link entities to their related concepts and to each other. Then compile the vault and report which pages you created and their pageType.

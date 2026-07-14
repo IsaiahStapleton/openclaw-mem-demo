@@ -5,7 +5,7 @@ A reproducible walkthrough of what the claw-operator's opt-in memory stack
 `spec.memory`) does for an agent.
 
 Two identical OpenClaw instances are seeded with an identical two-month memory
-corpus. The only difference is a two-line block in the Claw custom resource:
+corpus. The load-bearing difference is one block in the Claw custom resource:
 
 ```yaml
 spec:
@@ -13,14 +13,18 @@ spec:
     enabled: true
 ```
 
+(The memory instance also carries a few tuning knobs — a raised memory limit and
+two dreaming thresholds, all explained inline in `claw-memory.yaml` — but
+`spec.memory.enabled: true` is what turns the stack on.)
+
 Both instances have every note on disk. Ask them a paraphrased question about a
 decision buried a month deep and:
 
-- **`claw-plain`** (no memory stack) answers ~18s: *"I don't have that saved...
-  this workspace looks fresh... remind me once and I'll keep it straight."*
-- **`claw-memory`** (`spec.memory.enabled: true`) answers ~49s: *"For Beacon,
-  the weather dashboard, we settled on Open-Meteo... Python + FastAPI, uv only,
-  not pip"*, citing the exact memory file and line.
+- **`claw-plain`** (no memory stack) answers ~13s: *"this appears to be a fresh
+  workspace... I genuinely don't know what project or API you're referring to."*
+- **`claw-memory`** (`spec.memory.enabled: true`) answers ~15s: *"The project is
+  Beacon... Open-Meteo... Python + FastAPI, with dependencies managed via uv
+  only, no pip"*, citing the exact memory file (`memory/2026-06-06.md`).
 
 The point: **storing everything is trivial; remembering is a system.** The plain
 instance keeps the same notes and cannot use them.
@@ -47,14 +51,27 @@ into two chat windows and revealing a few artifacts.
 ## Prerequisites
 
 - An OpenShift/Kubernetes cluster running claw-operator **with `spec.memory`
-  support** (PR #36). Verify: `oc explain claw.spec.memory`
-- A namespace, and a Secret holding an OpenAI API key (embeddings drive vector
-  recall; the same credential drives chat).
+  and `spec.resources` support** (PR #36 plus the gateway-resources change).
+  Verify: `oc explain claw.spec.memory` and `oc explain claw.spec.resources`
+- A namespace and two Secrets:
+  - `anthropic-api-key` (key `api-key`) — the **chat model**. Layer 2 requires a
+    **non-Codex** model: OpenAI models route through the Codex harness, which
+    references `MEMORY.md` by pointer instead of loading its contents, so the
+    consolidation payoff silently disappears. Claude loads `MEMORY.md` at session
+    start. Any non-Codex model works; Claude Sonnet is the reference.
+  - `openai-api-key` (key `api-key`) — an **embedding-capable** credential, used
+    only to drive vector recall (Layer 1), not for chat.
 - `oc`, `python3`, `bash`, and (for layer 3's graph) [Obsidian](https://obsidian.md).
 
-The CRs carry no namespace; commands apply them with `-n $NS`. They expect a
-Secret named `openai-api-key` (key `api-key`); create one or edit the
-`secretRef` in both CR files.
+The CRs carry no namespace; commands apply them with `-n $NS`. They expect
+Secrets named `anthropic-api-key` and `openai-api-key` (key `api-key` on each);
+create them or edit the `secretRef`s in both CR files. The image is pinned to
+`2026.7.1` (needed for the Anthropic provider plugin and the non-Codex harness).
+
+> Reference setup note: this demo was validated with Claude served via GCP Vertex
+> (an `anthropic` credential of `type: gcp`). A native Anthropic API key routes
+> the same Claude models through the same non-Codex harness; if you use Vertex
+> instead, swap the `anthropic` credential block accordingly.
 
 ## 1. Deploy both instances
 
@@ -133,35 +150,68 @@ trade-offs, `claw-plain` can only guess.
 
 ## Layer 2 — Dreaming: it keeps what matters
 
-This layer needs no prompt. The operator seeds a nightly "Memory Dreaming
-Promotion" cron (`0 3 * * *`) that, on its own, promotes durable facts into
-`MEMORY.md` (loaded into context every session) and writes reflections into
-`DREAMS.md`. Reveal what it produced:
+The operator seeds a nightly "Memory Dreaming Promotion" cron (`0 3 * * *`) that,
+on its own, promotes durable facts into `MEMORY.md` and writes reflections into
+`DREAMS.md`. `MEMORY.md` is loaded into context at the **start of every session**
+(on a non-Codex model), so once a fact is promoted the agent knows it without
+searching. Reveal what dreaming produced:
 
 ```bash
 oc exec -n $NS deploy/claw-memory -c gateway -- cat ~/.openclaw/workspace/MEMORY.md
 oc exec -n $NS deploy/claw-memory -c gateway -- cat ~/.openclaw/workspace/DREAMS.md
 ```
 
-The Beacon decision has been distilled into curated long-term memory,
-autonomously. (To trigger it on demand instead of waiting for 03:00:
-`openclaw memory rem-backfill --path ~/.openclaw/workspace/memory` then
-`openclaw memory promote`.) The flywheel: an instance can only promote a fact it
-could recall in the first place, which is why `claw-plain` never builds one.
+`MEMORY.md` holds the Beacon decision, distilled from the raw daily log into
+curated long-term memory. `DREAMS.md` is the cron's own reflection diary.
+
+**The payoff — show it, don't just assert it.** Start a fresh session in
+`claw-memory` (`/new`) and ask the Layer 1 question again:
+
+```
+Quick question, no need to do any work: which API did we settle on for that hobby project we talked about, and what stack did we agree on?
+```
+
+In Layer 1 the answer came from a semantic **search** over the corpus (you can
+see the `memory_search` call and a file citation). Now it answers straight from
+`MEMORY.md` — **no search, no tool calls, faster** (~10s vs ~15s), opening with
+"From memory:". The fact rode in at session start. That is what promotion buys:
+not "it searches faster", but "it doesn't have to look".
+
+The flywheel: an instance can only promote a fact it could recall in the first
+place, which is why `claw-plain` never builds a `MEMORY.md` at all.
+
+> **Triggering dreaming for the recording.** The cron fires itself at 03:00. To
+> promote on demand instead of waiting, run a few recalls first (Layer 1 does
+> this), then:
+> ```bash
+> oc exec -n $NS deploy/claw-memory -c gateway -- openclaw memory promote --min-score 0.45 --apply
+> ```
+> Two dreaming knobs in `claw-memory.yaml` make this work at all: `minScore: 0.45`
+> (the default 0.8 is unreachable for paraphrased recall, so nothing would
+> promote) and `maxPromotedSnippetTokens: 1200` (the default 160 truncates the
+> snippet *before* the API choice, so the recalled fact would be incomplete).
 
 ## Layer 3 — Wiki: it organizes everything
 
-Paste into **`claw-memory` only** (a heavy turn, ~4-5 min; time-cut it in edit):
+Paste into **`claw-memory` only** (a heavy turn, ~2-4 min; time-cut it in edit).
+The prompt is explicit about page **type**, because the models will otherwise
+tag everything as a generic `synthesis` page and you lose the entity/concept
+structure that makes the graph legible (this exact prompt is `prompts/build-wiki-v2.txt`):
 
 ```
-Use your memory-wiki tools to build out your knowledge vault from your existing memory. Review your memory (the daily notes and MEMORY.md), and create or update wiki entity and concept pages for the projects and decisions you find, especially the Beacon project (its API choice and stack), and the other projects (Nimbus, Larkspur). Capture source-backed claims and relationships between them. Then compile the vault. Report which pages you created.
+Use your memory-wiki tools to build your knowledge vault from your existing memory (the daily notes and MEMORY.md).
+
+Use the correct pageType for each page. This matters:
+- pageType "entity" for each PROJECT you find (Beacon, Nimbus, Larkspur). These go in entities/.
+- pageType "concept" for each DECISION you find (the weather API choice for Beacon, the storage API choice for Nimbus, the device API choice for Larkspur). These go in concepts/.
+- pageType "synthesis" for exactly ONE page that abstracts ACROSS the projects: the shared pattern in how these API decisions were made. This goes in syntheses/.
+
+Do not put projects or decisions in syntheses/. Capture source-backed claims with line-level evidence, and link entities to their related concepts and to each other. Then compile the vault and report which pages you created and their pageType.
 ```
 
-Then the "it doesn't just catalog, it abstracts" beat, into **`claw-memory`**:
-
-```
-Using your memory-wiki tools, write a synthesis page that abstracts the decision-making pattern across your three hobby projects: Beacon, Nimbus, and Larkspur. What do their technology/API choices have in common? Look for the shared decision criteria and any recurring preferences. Link the synthesis to the three entity pages and the relevant concept pages, with source-backed claims. Then compile the vault. Report the page you created and what pattern you found.
-```
+This single build produces the entity pages (Beacon, Nimbus, Larkspur), the
+concept pages (each API decision), and one cross-project synthesis page — the
+"it doesn't just catalog, it abstracts" beat — in one turn.
 
 Reveal a synthesized page (cited claims + relationships):
 
@@ -192,7 +242,7 @@ renders the same graph.
 
 Three layers: **find it, keep it, organize it.** The plain instance had every
 note and could do none of it. Storing is trivial; this is a memory system, and
-it is two lines of YAML on a Claw resource.
+the operator packages it behind a `spec.memory` checkbox on a Claw resource.
 
 ---
 
@@ -209,13 +259,18 @@ python3 -c "import json;d=json.load(open('memory.json'));m=d['result']['meta']['
 ```
 
 The prompts used in the walkthrough are also in `prompts/` for scripting:
-`recall-only.txt`, `s2probe2.txt` (rationale), `build-wiki.txt`,
-`build-synthesis.txt`. (`s1p1.txt`/`s1p2.txt` are an older two-session variant;
-`s2probe1.txt` is a recall+scaffold probe, heavier and OOM-prone, see caveats.)
+`recall-only.txt`, `s2probe2.txt` (rationale), `build-wiki-v2.txt` (the explicit
+pageType build). (`build-wiki.txt` is the older, under-specified build that tags
+everything as a synthesis page; `s1p1.txt`/`s1p2.txt` are an older two-session
+variant; `s2probe1.txt` is a recall+scaffold probe, heavier and OOM-prone.)
 
-Measured single-run A/B (recall probe): `claw-plain` ~18s / ~17.5k tokens of
-amnesia vs `claw-memory` ~49s / ~21k tokens of cited recall. The memory instance
-is *slower*, retrieval is not free; the result is about correctness, not speed.
+Measured single-run A/B on the reference stack (`2026.7.1`, Claude Sonnet):
+- **Layer 1 (cold):** `claw-plain` ~13s of amnesia vs `claw-memory` ~15s of cited
+  recall via `memory_search`. The memory instance is slightly slower here;
+  retrieval is not free, and Layer 1 is about correctness, not speed.
+- **Layer 2 (after promotion):** the same question answered from `MEMORY.md` in
+  ~10s with **zero** retrieval tool calls. Consolidation is where the speed win
+  shows up, because the fact is already in context.
 
 ---
 
@@ -259,15 +314,19 @@ adds the wiki and dreaming layers and packages them behind `spec.memory`.)
 
 # Caveats and known issues
 
-- **Heavy multi-tool turns can OOM the memory instance's gateway** at the default
-  4Gi limit (an upstream issue involving the codex harness's session mirroring
-  and the wiki bridge; the pod self-recovers). Recall, rationale, and the wiki
-  builds are stable; the recall+scaffold probe (`prompts/s2probe1.txt`) is the
-  risky one, keep it off camera.
+- **The wiki build (Layer 3) OOMs the gateway at the default 4Gi limit** — it is
+  a large single synthesis turn. `claw-memory.yaml` sets
+  `spec.resources.limits.memory: 8Gi` to fix this, which needs a claw-operator
+  that supports `spec.resources`. At 8Gi the build completes in ~2 min; at 4Gi it
+  is SIGKILLed with no error and writes no pages.
+- **Layer 2 requires a non-Codex chat model.** On the Codex harness (OpenAI
+  models) `MEMORY.md` is injected only as a pointer, not as content, so a
+  promoted fact never rides into context and the "answers without searching"
+  payoff silently fails. This is why both CRs pin Claude.
 - Re-running conversational prompts writes new memory on `claw-memory`
   (including `MEMORY.md`), which changes later citations. For a clean repeat,
   delete both Claws and their PVCs and start from Setup.
-- The wiki's entity/concept synthesis is driven by the prompts above (or ongoing
+- The wiki's entity/concept synthesis is driven by the prompt above (or ongoing
   agent activity); there is no wiki cron yet, unlike dreaming. Bridge *import* of
   raw memory is automatic, but was bypassed here by side-loading the corpus, so
   the wiki starts empty until the build prompt runs.

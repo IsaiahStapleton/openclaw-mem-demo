@@ -4,7 +4,9 @@ metadata:
   name: claw-plain
 spec:
   # Pinned so both demo instances run the identical OpenClaw build.
-  image: ghcr.io/openclaw/openclaw:2026.6.11
+  # Must match claw-memory exactly (2026.7.1); the ONLY intended differences are
+  # spec.memory (absent here) and memorySearch (disabled here).
+  image: ghcr.io/openclaw/openclaw:2026.7.1
   idle: false
   # NO spec.memory block. This is the control instance.
   config:
@@ -14,7 +16,9 @@ spec:
       agents:
         defaults:
           model:
-            primary: openai/gpt-5.5
+            # Same non-Codex chat model as claw-memory, so the only variable is
+            # the memory stack, not the model.
+            primary: anthropic/claude-sonnet-4-6
           # Explicitly disable semantic search. The operator enables it by
           # default from any embedding-capable credential (upstream #177),
           # independently of spec.memory. This is the control instance, so we
@@ -29,9 +33,14 @@ spec:
             name: Claw-Plain
           workspace: ~/.openclaw/workspace
   credentials:
-  # OpenAI credential present on BOTH instances so model access is identical;
-  # only the memory instance uses it for embeddings. Create this Secret in
-  # your namespace (key: api-key) or point secretRef at your own.
+  # Both credentials present on BOTH instances so model access is identical;
+  # only the memory instance uses the OpenAI key (for embeddings), and only
+  # because it has search enabled. Create these Secrets (key: api-key) or edit.
+  - name: anthropic
+    provider: anthropic
+    secretRef:
+    - key: api-key
+      name: anthropic-api-key
   - name: openai
     provider: openai
     secretRef:
