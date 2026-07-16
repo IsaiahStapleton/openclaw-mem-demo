@@ -141,9 +141,38 @@ oc exec -n $NS deploy/claw-memory -c gateway -- \
   sh -c 'cd ~/.openclaw/workspace/wiki && tar -cf - main' | tar -C wiki-vault -xf -
 ```
 
-**Open folder as vault** → `wiki-vault/main` → **Graph view** (`Cmd/Ctrl+G`): the
-three projects as hubs, their decisions as concept satellites, source notes as
-leaves, and one synthesis page tying the clusters together.
+**Open folder as vault** → `wiki-vault/main` → **Graph view** (`Cmd/Ctrl+G`).
+
+Filter first, or the graph is unreadable. The root `index.md` links to every page
+and `sources/index.md` links to all 73 bridged notes, so two hub-and-spoke stars
+swamp the structure worth showing. In the graph controls (gear icon), under
+**Filters**, paste into the search box:
+
+```
+-path:sources -path:reports -file:index -file:inbox -file:AGENTS -file:WIKI
+```
+
+Dropping the sources loses nothing the graph was showing: source pages have no
+links of their own, and a page cites its evidence through `sourceIds` frontmatter
+and a claims table, neither of which Obsidian draws as an edge. The provenance is
+real but it lives on the page, not in the graph: open any `concepts/` page in
+Obsidian to show its claims table citing each source file and line. What survives
+the filter is only what the agent reasoned into existence: the projects as hubs,
+their decisions as concept satellites, and one synthesis page tying the clusters
+together.
+
+Then under **Groups**, add one group per page type so the three kinds read apart
+at a glance:
+
+```
+path:entities
+path:concepts
+path:syntheses
+```
+
+Groups only color what the filter already allowed through, so the filter is doing
+the real work; the colors just make the entity/concept/synthesis split legible on
+camera.
 
 **Close:** find it, keep it, organize it. The plain instance had every note and
 could do none of it. The operator packages the whole thing behind a `spec.memory`
