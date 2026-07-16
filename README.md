@@ -112,18 +112,26 @@ because the promoted fact loads at session start. Not "it searches faster", but
 ## Layer 3 — Wiki
 
 Paste into **`claw-memory` only** (~2-4 min; this exact prompt is
-`prompts/build-wiki-v2.txt`):
+`prompts/build-wiki-v3.txt`):
 
 ```
 Use your memory-wiki tools to build your knowledge vault from your existing memory (the daily notes and MEMORY.md).
 
 Use the correct pageType for each page. This matters:
-- pageType "entity" for each PROJECT you find (Beacon, Nimbus, Larkspur). These go in entities/.
-- pageType "concept" for each DECISION you find (the weather API choice for Beacon, the storage API choice for Nimbus, the device API choice for Larkspur). These go in concepts/.
-- pageType "synthesis" for exactly ONE page that abstracts ACROSS the projects: the shared pattern in how these API decisions were made. This goes in syntheses/.
+- pageType "entity" for each project you find. These go in entities/.
+- pageType "concept" for each significant decision you find. These go in concepts/.
+- pageType "synthesis" for a page that abstracts across projects: a pattern that only becomes visible when you compare them. These go in syntheses/.
 
 Do not put projects or decisions in syntheses/. Capture source-backed claims with line-level evidence, and link entities to their related concepts and to each other. Then compile the vault and report which pages you created and their pageType.
 ```
+
+The prompt names no projects and no decisions: the agent discovers them. It defines
+the page **vocabulary** (and the directory each type lands in) because that is what
+memory-wiki enforces — a page's type is derived from its directory, and a page
+outside `entities/`, `concepts/`, `sources/`, `syntheses/`, or `reports/` is
+invisible to the vault. `prompts/build-wiki-v2.txt` is the earlier, more prescriptive
+version (it named Beacon/Nimbus/Larkspur and pre-stated the synthesis pattern); keep
+it as a fallback if a run tags everything `synthesis` and the structure collapses.
 
 Extract the vault and open it in Obsidian:
 
