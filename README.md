@@ -38,7 +38,7 @@ Ask both a paraphrased question about a decision buried a month deep:
   (Claude): OpenAI models route through the Codex harness, which does *not* load
   `MEMORY.md` into context and silently breaks Layer 2. Exact credential blocks
   are in the CR files.
-- `oc`, `python3`, `bash`, `jq`, and [Obsidian](https://obsidian.md) for the Layer 3 graph.
+- `oc`, `python3`, `bash`, and [Obsidian](https://obsidian.md) for the Layer 3 graph.
 - Both CRs pin image `2026.7.1`.
 
 ## Steps
@@ -92,9 +92,8 @@ follow-up into both: *"Remind me why we ruled out the other weather APIs."*
 Run the dreaming cron (after Layer 1 — it only promotes facts that were recalled):
 
 ```bash
-JOB=$(oc exec -n $NS deploy/claw-memory -c gateway -- openclaw cron list --json \
-  | jq -r '.jobs[] | select(.description | contains("managed-by=memory-core.short-term-promotion")) | .id')
-oc exec -n $NS deploy/claw-memory -c gateway -- openclaw cron run "$JOB"
+oc exec -n $NS deploy/claw-memory -c gateway -- openclaw cron list        # find the "Memory Dreaming Promotion" job id
+oc exec -n $NS deploy/claw-memory -c gateway -- openclaw cron run <job-id>
 ```
 
 It writes `DREAMS.md` (reflections) and promotes the Beacon decision into
